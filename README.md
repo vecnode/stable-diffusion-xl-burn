@@ -4,6 +4,12 @@ Stable-Diffusion-XL-Burn is a Rust-based project which ports stable diffusion xl
 
 ## How To Use
 
+
+```sh
+cargo run --release --bin sample -- --model-dir SDXL1.0 --output-dir ./ --prompt "A tree."
+cargo run --release --bin sample -- --model-dir SDXL1.0 --output-dir ./ --prompt "A tree." -w 512 -h 512
+```
+
 ### Step 1: Download the Model and Set Environment Variables
 
 The model files must be in burn's format.

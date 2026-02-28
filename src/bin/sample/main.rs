@@ -19,32 +19,83 @@ use burn::record::{NamedMpkFileRecorder, HalfPrecisionSettings, Recorder};
 
 // Use LibTorch backend with CUDA if available, otherwise use WGPU for GPU acceleration
 use burn_tch::{LibTorch, LibTorchDevice};
-use burn_wgpu::Wgpu;
+use burn_wgpu::{Wgpu, WgpuDevice};
 use tch;
+use std::io::{self, Write};
 
 fn load_embedder_model<B: Backend>(model_dir: &str, device: &B::Device) -> Result<Embedder<B>, Box<dyn Error>> {
+    print!("  Loading config... ");
+    io::stdout().flush().unwrap();
     let config = EmbedderConfig::load(&format!("{}.cfg", model_dir))?;
+    println!("✓");
+    
+    print!("  Loading model weights from disk (this may take a while)... ");
+    io::stdout().flush().unwrap();
     let record = NamedMpkFileRecorder::<HalfPrecisionSettings>::new().load(model_dir.into(), device)?;
+    println!("✓");
+    
+    print!("  Initializing model structure... ");
+    io::stdout().flush().unwrap();
+    let model = config.init(device);
+    println!("✓");
+    
+    print!("  Loading weights into model... ");
+    io::stdout().flush().unwrap();
+    let model = model.load_record(record);
+    println!("✓");
 
-    Ok(config.init(device).load_record(record))
+    Ok(model)
 }
 
 fn load_diffuser_model<B: Backend>(model_dir: &str, device: &B::Device) -> Result<Diffuser<B>, Box<dyn Error>> {
+    print!("  Loading config... ");
+    io::stdout().flush().unwrap();
     let config = DiffuserConfig::load(&format!("{}.cfg", model_dir))?;
+    println!("✓");
+    
+    print!("  Loading model weights from disk (this may take a while - UNet is large)... ");
+    io::stdout().flush().unwrap();
     let record = NamedMpkFileRecorder::<HalfPrecisionSettings>::new().load(model_dir.into(), device)?;
-    //let record = NamedMpkFileRecorder::<HalfPrecisionSettings>::new().load(model_dir.into(), device)?;
+    println!("✓");
+    
+    print!("  Initializing UNet structure... ");
+    io::stdout().flush().unwrap();
+    let model = config.init(device);
+    println!("✓");
+    
+    print!("  Loading weights into UNet (transferring to GPU if using CUDA)... ");
+    io::stdout().flush().unwrap();
+    let model = model.load_record(record);
+    println!("✓");
 
-    Ok(config.init(device).load_record(record))
+    Ok(model)
 }
 
 fn load_latent_decoder_model<B: Backend>(
     model_dir: &str,
     device: &B::Device
 ) -> Result<LatentDecoder<B>, Box<dyn Error>> {
+    print!("  Loading config... ");
+    io::stdout().flush().unwrap();
     let config = LatentDecoderConfig::load(&format!("{}.cfg", model_dir))?;
+    println!("✓");
+    
+    print!("  Loading model weights from disk... ");
+    io::stdout().flush().unwrap();
     let record = NamedMpkFileRecorder::<HalfPrecisionSettings>::new().load(model_dir.into(), device)?;
+    println!("✓");
+    
+    print!("  Initializing autoencoder structure... ");
+    io::stdout().flush().unwrap();
+    let model = config.init(device);
+    println!("✓");
+    
+    print!("  Loading weights into autoencoder... ");
+    io::stdout().flush().unwrap();
+    let model = model.load_record(record);
+    println!("✓");
 
-    Ok(config.init(device).load_record(record))
+    Ok(model)
 }
 
 #[allow(dead_code)]
@@ -124,46 +175,256 @@ struct Opts {
 // LibTorch with CUDA for best performance, WGPU as fallback for GPU via Vulkan
 type TorchBackend = LibTorch<f32>;
 type TorchBackendF16 = LibTorch<tensor::f16>;
-#[allow(dead_code)]
 type WgpuBackend = Wgpu;
 
-struct InpaintingTensors {
+struct InpaintingTensors<B: Backend> {
     orig_dims: (usize, usize), 
-    reference_latent: Tensor<TorchBackendF16, 4>, 
-    mask: Tensor<TorchBackendF16, 4, Bool>, 
+    reference_latent: Tensor<B, 4>, 
+    mask: Tensor<B, 4, Bool>, 
+}
+
+fn prompt_backend_choice() -> u8 {
+    loop {
+        print!("Select backend:\n  1: torch+burn (LibTorch with CUDA)\n  2: burn (WGPU - pure Burn backend)\nChoice [1/2]: ");
+        io::stdout().flush().unwrap();
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim();
+        
+        match input {
+            "1" => {
+                println!("Selected: torch+burn (LibTorch backend)");
+                return 1;
+            }
+            "2" => {
+                println!("Selected: burn (WGPU backend)");
+                return 2;
+            }
+            _ => {
+                println!("Invalid choice. Please enter 1 or 2.");
+            }
+        }
+    }
 }
 
 fn main() {
-    // Try CUDA first, fallback to WGPU for GPU acceleration via Vulkan
-    if tch::Cuda::is_available() && tch::Cuda::device_count() > 0 {
-        println!("CUDA detected! Using LibTorch with CUDA GPU");
-        println!("Device: CUDA(0)");
-        let device = LibTorchDevice::Cuda(0);
-        if let Err(e) = run_with_torch_device(device) {
-            eprintln!("CUDA failed: {}. Falling back to WGPU...", e);
-            run_with_wgpu();
+    let backend_choice = prompt_backend_choice();
+    
+    match backend_choice {
+        1 => {
+            // Path 1: LibTorch backend (current implementation)
+            println!("\n=== Using LibTorch Backend ===");
+            if tch::Cuda::is_available() && tch::Cuda::device_count() > 0 {
+                println!("CUDA detected! Using LibTorch with CUDA GPU");
+                println!("Device: CUDA(0)");
+                let device = LibTorchDevice::Cuda(0);
+                if let Err(e) = run_with_torch_device(device) {
+                    eprintln!("CUDA failed: {}. Falling back to CPU...", e);
+                    let cpu_device = LibTorchDevice::Cpu;
+                    if let Err(e) = run_with_torch_device(cpu_device) {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                println!("CUDA not available. Using CPU (will be slow).");
+                let device = LibTorchDevice::Cpu;
+                if let Err(e) = run_with_torch_device(device) {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
-    } else {
-        println!("LibTorch CUDA not available.");
-        println!("Using WGPU backend - will use your NVIDIA GPU via Vulkan");
-        run_with_wgpu();
+        2 => {
+            // Path 2: WGPU backend (pure Burn)
+            println!("\n=== Using WGPU Backend (Pure Burn) ===");
+            run_with_wgpu_backend();
+        }
+        _ => {
+            eprintln!("Invalid backend choice");
+            std::process::exit(1);
+        }
     }
 }
 
-fn run_with_wgpu() {
-    // WGPU implementation would require significant refactoring
-    // For now, fall back to CPU since LibTorch CUDA is not available
-    println!("Note: Full WGPU support requires backend conversion throughout the pipeline.");
-    println!("Using CPU as fallback (will be slow).");
-    println!("To get GPU acceleration:");
-    println!("  1. Rebuild LibTorch with CUDA support (recommended for best performance)");
-    println!("  2. Or implement full WGPU backend support (requires code changes)");
+fn run_with_wgpu_backend() {
+    let device = WgpuDevice::default();
+    println!("Device: {:?}", device);
+    println!("WGPU will use GPU acceleration via Vulkan/DirectX12/Metal");
     
-    let device = LibTorchDevice::Cpu;
-    if let Err(e) = run_with_torch_device(device) {
+    let opts = Opts::from_args();
+    
+    // WGPU uses f32, but models are stored in f16
+    // We'll load them and convert - this should work via backend converter
+    println!("\nNote: WGPU backend uses f32 precision.");
+    println!("Models will be loaded and converted from f16 to f32 automatically.");
+    
+    if let Err(e) = run_with_wgpu_device(device, opts) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+}
+
+fn run_with_wgpu_device(device: WgpuDevice, opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
+    // WGPU implementation - similar structure to LibTorch but using WGPU backend
+    // Note: This is experimental and may have performance differences
+    
+    // For inpainting (if needed)
+    let _inpainting_info: Option<()> = opts.reference_img.map(|_ref_dir| {
+        println!("Inpainting not yet implemented for WGPU backend.");
+        println!("Please use option 1 (torch+burn) for inpainting support.");
+        std::process::exit(0);
+    });
+
+    let conditioning = {
+        println!("Loading embedder...");
+        // Try loading with f16 first, then convert if needed
+        // WGPU should handle the conversion automatically
+        let embedder: Embedder<WgpuBackend> =
+            load_embedder_model_wgpu(&format!("{}/embedder", opts.model_dir.to_str().unwrap()), &device)?;
+
+        let resolution = [opts.height, opts.width];  // [height, width] format
+        
+        // Warn if resolution is not in training set
+        if !RESOLUTIONS.iter().any(|&[h, w]| h == resolution[0] && w == resolution[1]) {
+            println!("Warning: Resolution {}x{} is not in the training set, but will be attempted.", resolution[1], resolution[0]);
+        }
+
+        let size = Tensor::from_ints(resolution, &device).unsqueeze();
+        let crop = Tensor::from_ints([0, 0], &device).unsqueeze();
+        let ar = Tensor::from_ints(resolution, &device).unsqueeze();
+
+        println!("Running embedder...");
+        embedder.text_to_conditioning(&opts.prompt, size, crop, ar)
+    };
+
+    // WGPU uses f32, so we don't need f16 conversion
+    // But we need to ensure the conditioning matches the diffuser backend
+    let conditioning_wgpu: Conditioning<WgpuBackend> = conditioning;
+
+    let latent = {
+        println!("Loading diffuser...");
+        let diffuser: Diffuser<WgpuBackend> =
+            load_diffuser_model_wgpu(&format!("{}/diffuser", opts.model_dir.to_str().unwrap()), &device)?;
+
+        println!("Running diffuser...");
+        diffuser.sample_latent(conditioning_wgpu.clone(), opts.unconditional_guidance_scale, opts.n_diffusion_steps)
+    };
+
+    let latent = if opts.use_refiner {
+        println!("Loading refiner...");
+        let diffuser: Diffuser<WgpuBackend> =
+            load_diffuser_model_wgpu(&format!("{}/refiner", opts.model_dir.to_str().unwrap()), &device)?;
+
+        println!("Running refiner...");
+        diffuser.refine_latent(
+            latent,
+            conditioning_wgpu,
+            opts.unconditional_guidance_scale,
+            800,
+            opts.n_diffusion_steps,
+        )
+    } else {
+        latent
+    };
+
+    let images = {
+        println!("Loading latent decoder...");
+        let latent_decoder: LatentDecoder<WgpuBackend> =
+            load_latent_decoder_model_wgpu(&format!("{}/latent_decoder", opts.model_dir.to_str().unwrap()), &device)?;
+
+        println!("Running decoder...");
+        latent_decoder.latent_to_image(latent)
+    };
+
+    println!("Saving images...");
+    save_images(
+        &images.buffer,
+        opts.output_dir.to_str().unwrap(),
+        images.width as u32,
+        images.height as u32,
+    )?;
+    println!("Done.");
+
+    Ok(())
+}
+
+// WGPU-specific model loading functions
+// These try to load f16 models and convert to f32 for WGPU
+fn load_embedder_model_wgpu<B: Backend>(model_dir: &str, device: &B::Device) -> Result<Embedder<B>, Box<dyn Error>> {
+    print!("  Loading config... ");
+    io::stdout().flush().unwrap();
+    let config = EmbedderConfig::load(&format!("{}.cfg", model_dir))?;
+    println!("✓");
+    
+    print!("  Loading model weights from disk... ");
+    io::stdout().flush().unwrap();
+    let record = NamedMpkFileRecorder::<HalfPrecisionSettings>::new().load(model_dir.into(), device)?;
+    println!("✓");
+    
+    print!("  Initializing model structure... ");
+    io::stdout().flush().unwrap();
+    let model = config.init(device);
+    println!("✓");
+    
+    print!("  Loading weights into model (converting f16 to f32)... ");
+    io::stdout().flush().unwrap();
+    let model = model.load_record(record);
+    println!("✓");
+
+    Ok(model)
+}
+
+fn load_diffuser_model_wgpu<B: Backend>(model_dir: &str, device: &B::Device) -> Result<Diffuser<B>, Box<dyn Error>> {
+    print!("  Loading config... ");
+    io::stdout().flush().unwrap();
+    let config = DiffuserConfig::load(&format!("{}.cfg", model_dir))?;
+    println!("✓");
+    
+    print!("  Loading model weights from disk (this may take a while - UNet is large)... ");
+    io::stdout().flush().unwrap();
+    let record = NamedMpkFileRecorder::<HalfPrecisionSettings>::new().load(model_dir.into(), device)?;
+    println!("✓");
+    
+    print!("  Initializing UNet structure... ");
+    io::stdout().flush().unwrap();
+    let model = config.init(device);
+    println!("✓");
+    
+    print!("  Loading weights into UNet (converting f16 to f32, transferring to GPU)... ");
+    io::stdout().flush().unwrap();
+    let model = model.load_record(record);
+    println!("✓");
+
+    Ok(model)
+}
+
+fn load_latent_decoder_model_wgpu<B: Backend>(
+    model_dir: &str,
+    device: &B::Device
+) -> Result<LatentDecoder<B>, Box<dyn Error>> {
+    print!("  Loading config... ");
+    io::stdout().flush().unwrap();
+    let config = LatentDecoderConfig::load(&format!("{}.cfg", model_dir))?;
+    println!("✓");
+    
+    print!("  Loading model weights from disk... ");
+    io::stdout().flush().unwrap();
+    let record = NamedMpkFileRecorder::<HalfPrecisionSettings>::new().load(model_dir.into(), device)?;
+    println!("✓");
+    
+    print!("  Initializing autoencoder structure... ");
+    io::stdout().flush().unwrap();
+    let model = config.init(device);
+    println!("✓");
+    
+    print!("  Loading weights into autoencoder (converting f16 to f32)... ");
+    io::stdout().flush().unwrap();
+    let model = model.load_record(record);
+    println!("✓");
+
+    Ok(model)
 }
 
 fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::error::Error>> {
@@ -226,7 +487,7 @@ fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::erro
             mask
         };
 
-        InpaintingTensors {
+        InpaintingTensors::<TorchBackendF16> {
             orig_dims: (imgs.width, imgs.height), 
             reference_latent: latent, 
             mask: mask.unsqueeze::<4>(), 
