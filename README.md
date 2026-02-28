@@ -33,7 +33,7 @@ cargo run --release --bin sample -- --model-dir SDXL1.0 --output-dir ./ --prompt
 
 This command will generate an image according to the provided prompt, which will be saved as '0.png'.
 
-![An image of a crab](crab0.png)
+- ![An image of a crab]
 
 One can also perform inpainting. Use a large number of steps to achieve the best coherence.
 
@@ -50,7 +50,7 @@ cargo run --release --bin sample \
      --crop-bottom 200
 ```
 
-![An image of a crab with the ocean visible](inpainted0.png)
+- ![An image of a crab with the ocean visible]
 
 Execute the following to see all available options.
 
@@ -118,9 +118,3 @@ export TORCH_CUDA_VERSION=cu113
 # Arguments: <model> <refiner(y/n)> <unconditional_guidance_scale> <n_diffusion_steps> <prompt> <output_image>
 cargo run --release --bin sample SDXL n 7.5 30 "fireworks" celebration
 ```
-
-## License
-
-This project is licensed under MIT license.
-
-We wish you a productive time using this project. Enjoy!

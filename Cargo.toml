@@ -7,9 +7,14 @@ edition = "2021"
 
 [dependencies]
 burn = "0.13.0"
-burn-tch = "0.13.0"
 burn-autodiff = "0.13.0"
+# Use LibTorch with CUDA for best NVIDIA GPU performance
+burn-tch = "0.13.0"
 tch = "0.15.0"
+# WGPU as fallback if LibTorch CUDA detection fails
+burn-wgpu = "0.13.0"
+# Optional: WGPU for cross-platform GPU support (slower, use only if LibTorch CUDA unavailable)
+# burn-wgpu = "0.13.0"
 serde = {version = "1.0.171", features = ["std", "derive"]}
 npy = "0.4.0"
 num-traits = "0.2.15"

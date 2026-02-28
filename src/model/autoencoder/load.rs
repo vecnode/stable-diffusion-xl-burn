@@ -1,13 +1,9 @@
-use super::GroupNorm;
 use crate::model::load::*;
 
 use std::error::Error;
 
 use burn::{
-    config::Config,
-    module::{Module, Param},
-    nn,
-    tensor::{backend::Backend, Tensor},
+    tensor::backend::Backend,
 };
 
 use super::*;

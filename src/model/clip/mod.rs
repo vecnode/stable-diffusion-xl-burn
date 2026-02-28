@@ -7,9 +7,8 @@ use burn::{
     module::{Module, Param},
     nn,
     tensor::{
-        activation::{sigmoid, softmax},
+        activation::sigmoid,
         backend::Backend,
-        module::embedding,
         Distribution, Int, Tensor,
     },
 };
@@ -92,7 +91,7 @@ impl<B: MyBackend> CLIP<B> {
     }*/
 
     pub fn forward_hidden(&self, x: Tensor<B, 2, Int>, hidden_idx: usize) -> Tensor<B, 3> {
-        let [n_batch, seq_len] = x.dims();
+        let [_n_batch, seq_len] = x.dims();
 
         let mask = Tensor::from_primitive(B::attn_decoder_mask(seq_len, &x.device()));
 
@@ -116,7 +115,7 @@ impl<B: MyBackend> CLIP<B> {
         text: Tensor<B, 2, Int>,
         hidden_idx: usize,
     ) -> (Tensor<B, 3>, Tensor<B, 2>) {
-        let [n_batch, seq_len] = text.dims();
+        let [_n_batch, seq_len] = text.dims();
 
         let mask = Tensor::from_primitive(B::attn_decoder_mask(seq_len, &text.device()));
 

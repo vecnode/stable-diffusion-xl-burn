@@ -23,7 +23,7 @@ impl GroupNormConfig {
             self.n_group
         );
 
-        let n_per_group = self.n_channel / self.n_group;
+        let _n_per_group = self.n_channel / self.n_group;
 
         let gamma = Param::from_tensor(Tensor::ones([self.n_channel], device));
         let beta = Param::from_tensor(Tensor::zeros([self.n_channel], device));

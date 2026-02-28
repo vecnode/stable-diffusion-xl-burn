@@ -1,29 +1,26 @@
-use std::env;
 use std::error::Error;
 use std::process;
 
-use stablediffusion::model::autoencoder::{load::load_decoder, Decoder, DecoderConfig};
-use stablediffusion::model::autoencoder::{load::load_encoder, Encoder, EncoderConfig};
-use stablediffusion::model::clip::{load::load_clip_text_transformer, CLIPConfig, CLIP};
 use stablediffusion::model::stablediffusion::{
-    load::*, offset_cosine_schedule_cumprod, Diffuser, DiffuserConfig, Embedder, EmbedderConfig,
+    Diffuser, DiffuserConfig, Embedder, EmbedderConfig,
     LatentDecoder, LatentDecoderConfig, RESOLUTIONS,
     RawImages, 
 };
-use stablediffusion::model::unet::{load::load_unet, UNet, UNetConfig};
 
 use stablediffusion::backend::Backend;
 
 use burn::{
     config::Config,
-    module::{Module, Param},
-    nn,
-    tensor::{self, Tensor},
+    module::Module,
+    tensor::{self, ElementConversion, Tensor},
 };
 
-use burn_tch::{LibTorch, LibTorchDevice};
+use burn::record::{NamedMpkFileRecorder, HalfPrecisionSettings, Recorder};
 
-use burn::record::{self, NamedMpkFileRecorder, HalfPrecisionSettings, Recorder};
+// Use LibTorch backend
+// Note: LibTorch build doesn't have CUDA support, so using CPU
+// WGPU could be used for GPU acceleration via Vulkan if needed
+use burn_tch::{LibTorch, LibTorchDevice};
 
 fn load_embedder_model<B: Backend>(model_dir: &str, device: &B::Device) -> Result<Embedder<B>, Box<dyn Error>> {
     let config = EmbedderConfig::load(&format!("{}.cfg", model_dir))?;
@@ -50,15 +47,12 @@ fn load_latent_decoder_model<B: Backend>(
     Ok(config.init(device).load_record(record))
 }
 
+#[allow(dead_code)]
 fn arb_tensor<B: Backend, const D: usize>(dims: [usize; D], device: &B::Device) -> Tensor<B, D> {
     let prod: usize = dims.iter().cloned().product();
     Tensor::arange(0..prod as i64, device).float().sin().reshape(dims)
 }
 
-use stablediffusion::token::{clip::ClipTokenizer, open_clip::OpenClipTokenizer, Tokenizer};
-
-use burn::tensor::ElementConversion;
-use num_traits::cast::ToPrimitive;
 use stablediffusion::model::stablediffusion::Conditioning;
 
 use stablediffusion::backend_converter::*;
@@ -118,18 +112,33 @@ struct Opts {
     output_dir: PathBuf,
 }
 
+// Type aliases for backends - using LibTorch
+// Note: LibTorch build doesn't have CUDA, so using CPU
 type TorchBackend = LibTorch<f32>;
-type Backend_f16 = LibTorch<tensor::f16>;
+type BackendF16 = LibTorch<tensor::f16>;
 
 struct InpaintingTensors {
     orig_dims: (usize, usize), 
-    reference_latent: Tensor<Backend_f16, 4>, 
-    mask: Tensor<Backend_f16, 4, Bool>, 
+    reference_latent: Tensor<BackendF16, 4>, 
+    mask: Tensor<BackendF16, 4, Bool>, 
 }
 
 fn main() {
-    let device = LibTorchDevice::Cuda(0);
+    // LibTorch was built without CUDA support, so use CPU
+    // Note: WGPU could be used here for GPU acceleration via Vulkan
+    println!("LibTorch build does not have CUDA support.");
+    println!("Using CPU device (will be slow for large models).");
+    println!("Note: For GPU acceleration, you could use WGPU backend which works via Vulkan.");
+    println!("Device: CPU");
+    
+    let device = LibTorchDevice::Cpu;
+    if let Err(e) = run_with_torch_device(device) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
 
+fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::error::Error>> {
     let opts = Opts::from_args();
 
     let inpainting_info = opts.reference_img.map(|ref_dir| {
@@ -178,8 +187,8 @@ fn main() {
         let pad_top = crop_top;
         let pad_bottom = height - crop_bottom;
 
-        let mask = Tensor::<Backend_f16, 2>::ones([crop_height, crop_width], &device)
-            .pad( (pad_left, pad_right, pad_top, pad_bottom), 0.0.elem() )
+        let mask = Tensor::<BackendF16, 2>::ones([crop_height, crop_width], &device)
+            .pad( (pad_left, pad_right, pad_top, pad_bottom), 0.0_f32.elem() )
             .bool()
             .unsqueeze::<4>()
             .expand([1, 4, height, width]);
@@ -196,24 +205,6 @@ fn main() {
         }
     });
 
-    /*let args: Vec<String> = std::env::args().collect();
-    if args.len() != 7 {
-        eprintln!("Usage: {} <model_dir> <refiner(y/n)> <unconditional_guidance_scale> <n_diffusion_steps> <prompt> <output_image_name>", args[0]);
-        process::exit(1);
-    }*/
-
-
-    /*let unconditional_guidance_scale: f64 = args[3].parse().unwrap_or_else(|_| {
-        eprintln!("Error: Invalid unconditional guidance scale.");
-        process::exit(1);
-    });
-    let n_steps: usize = args[4].parse().unwrap_or_else(|_| {
-        eprintln!("Error: Invalid number of diffusion steps.");
-        process::exit(1);
-    });
-    let prompt = &args[5];
-    let output_image_name = &args[6];*/
-
     let conditioning = {
         println!("Loading embedder...");
         let embedder: Embedder<TorchBackend> =
@@ -225,6 +216,7 @@ fn main() {
             [1024, 1024]
         }; //RESOLUTIONS[8];
 
+        // Use Burn's generic tensor creation APIs
         let size = Tensor::from_ints(resolution, &device).unsqueeze();
         let crop = Tensor::from_ints([0, 0], &device).unsqueeze();
         let ar = Tensor::from_ints(resolution, &device).unsqueeze();
@@ -233,12 +225,12 @@ fn main() {
         embedder.text_to_conditioning(&opts.prompt, size, crop, ar)
     };
 
-    let conditioning: Conditioning<Backend_f16> =
+    let conditioning: Conditioning<BackendF16> =
         conditioning.convert(DefaultBackendConverter::new(), &device);
 
     let latent = {
         println!("Loading diffuser...");
-        let diffuser: Diffuser<Backend_f16> =
+        let diffuser: Diffuser<BackendF16> =
             load_diffuser_model(&format!("{}/diffuser", opts.model_dir.to_str().unwrap()), &device).unwrap();
 
         if let Some(inpainting_info) = inpainting_info {
@@ -251,7 +243,7 @@ fn main() {
 
     let latent = if opts.use_refiner {
         println!("Loading refiner...");
-        let diffuser: Diffuser<Backend_f16> =
+        let diffuser: Diffuser<BackendF16> =
             load_diffuser_model(&format!("{}/refiner", opts.model_dir.to_str().unwrap()), &device).unwrap();
 
         println!("Running refiner...");
@@ -283,11 +275,10 @@ fn main() {
         opts.output_dir.to_str().unwrap(),
         images.width as u32,
         images.height as u32,
-    )
-    .unwrap();
+    )?;
     println!("Done.");
 
-    return;
+    Ok(())
 }
 
 use image::{self, ColorType::Rgb8, RgbImage, ImageError, ImageResult};
@@ -323,6 +314,7 @@ fn load_images(filenames: &[String]) -> Result<RawImages, ImgLoadError> {
 enum ImgLoadError {
     DifferentDimensions, 
     NoImages, 
+    #[allow(dead_code)]
     ImageError(ImageError), 
 }
 
@@ -348,6 +340,7 @@ fn save_images(images: &Vec<Vec<u8>>, basepath: &str, width: u32, height: u32) -
 }
 
 // save red test image
+#[allow(dead_code)]
 fn save_test_image() -> ImageResult<()> {
     let width = 256;
     let height = 256;

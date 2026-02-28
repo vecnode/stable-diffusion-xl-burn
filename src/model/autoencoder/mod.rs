@@ -2,25 +2,20 @@ pub mod load;
 
 use burn::{
     config::Config,
-    module::{Module, Param},
+    module::Module,
     nn::{
-        self,
-        conv::{Conv2d, Conv2dConfig, Conv2dRecord},
+        conv::{Conv2d, Conv2dConfig},
         PaddingConfig2d,
     },
     tensor::{
-        activation::{sigmoid, softmax},
         backend::Backend,
-        module::embedding,
-        Distribution, Int, Tensor,
+        Tensor,
     },
 };
 
 use super::groupnorm::*;
 use super::silu::*;
 use crate::backend::Backend as MyBackend;
-
-use std::iter;
 
 #[derive(Config)]
 pub struct AutoencoderConfig {}

@@ -23,6 +23,8 @@ pub trait Backend: burn::tensor::backend::Backend {
     }
 }
 
+// LibTorch-specific optimization: Use Torch's optimized attention only for LibTorch backend
+// All other backends use the generic Burn implementation above
 use burn::tensor::ops::FloatTensorOps;
 use burn::tensor::Float;
 use burn_tch::{self, TchElement, TchTensor};
@@ -36,8 +38,10 @@ impl<E: TchElement> Backend for burn_tch::LibTorch<E> {
         mask: Option<Self::FloatTensorPrimitive<2>>,
         n_head: usize,
     ) -> Self::FloatTensorPrimitive<3> {
+        // Use Burn's generic device API
         let device = &Self::float_device(&v);
 
+        // Convert to Burn tensors (generic API)
         let q = Tensor::from_primitive(q);
         let k = Tensor::from_primitive(k);
         let v = Tensor::from_primitive(v);
@@ -46,6 +50,7 @@ impl<E: TchElement> Backend for burn_tch::LibTorch<E> {
         let [_, k_ctx, _] = k.dims();
         let n_hstate = n_state / n_head;
 
+        // Use Burn's generic tensor operations
         let rearrange = |t: Tensor<Self, 3>| {
             let [_, n_ctx, _] = t.dims();
             t.reshape([n_batch, n_ctx, n_head, n_hstate])
@@ -56,12 +61,14 @@ impl<E: TchElement> Backend for burn_tch::LibTorch<E> {
         let k = rearrange(k).into_primitive();
         let v = rearrange(v).into_primitive();
 
-        // for some reason torch crashes when mask is None
+        // Use Burn's generic tensor creation
         let mask = mask.unwrap_or_else(|| {
             Tensor::<Self, 2, Float>::zeros([q_ctx, k_ctx], device)
                 .into_primitive()
         });
 
+        // Only this part uses Torch-specific API for performance optimization
+        // The rest uses Burn's generic tensor operations
         Tensor::<Self, 4>::from_primitive(TchTensor::new(
             tch::Tensor::scaled_dot_product_attention(
                 &q.tensor,
@@ -78,8 +85,6 @@ impl<E: TchElement> Backend for burn_tch::LibTorch<E> {
         .into_primitive()
     }
 }
-
-use burn_autodiff;
 
 //impl<B: Backend> Backend for burn_autodiff::ADBackendDecorator<B> {}
 

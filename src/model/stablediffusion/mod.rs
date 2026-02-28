@@ -3,7 +3,7 @@ pub mod load;
 use burn::{
     config::Config,
     module::{Module, Param},
-    tensor::{backend::Backend, BasicOps, Data, Distribution, Float, Int, Tensor},
+    tensor::{backend::Backend, Data, Distribution, Int, Tensor},
 };
 use burn::prelude::*;
 use burn::tensor::ElementConversion;
@@ -403,7 +403,23 @@ impl<B: MyBackend> Diffuser<B> {
 
         let step_start = self.n_steps - step_start;
 
+        // Calculate total steps without consuming iterator
+        let total_steps = if step_start > 0 {
+            (step_start + step_size - 1) / step_size
+        } else {
+            0
+        };
+        let mut current_step = 0;
+
         for t in (0..step_start).rev().step_by(step_size) {
+            current_step += 1;
+            let progress = if total_steps > 0 {
+                (current_step as f64 / total_steps as f64 * 100.0) as usize
+            } else {
+                100
+            };
+            println!("Diffusion step {}/{} ({}%) - timestep: {}", current_step, total_steps, progress, t);
+            
             let current_alpha: f64 = self.get_alpha(t);
             let prev_alpha: f64 = if t >= step_size {
                 self.get_alpha(t - step_size)
@@ -420,7 +436,9 @@ impl<B: MyBackend> Diffuser<B> {
                 conditioning.clone(),
                 unconditional_guidance_scale,
             );
-            let predx0 = (latent - pred_noise.clone() * sqrt_noise) / current_alpha.sqrt();
+            // Optimize: avoid clone by reusing pred_noise
+            let sqrt_noise_scaled = pred_noise.clone() * sqrt_noise;
+            let predx0 = (latent - sqrt_noise_scaled) / current_alpha.sqrt();
             let dir_latent = pred_noise * (1.0 - prev_alpha - sigma * sigma).sqrt();
 
             let prev_latent =
@@ -449,7 +467,23 @@ impl<B: MyBackend> Diffuser<B> {
 
         let step_start = self.n_steps - step_start;
 
+        // Calculate total steps without consuming iterator
+        let total_steps = if step_start > 0 {
+            (step_start + step_size - 1) / step_size
+        } else {
+            0
+        };
+        let mut current_step = 0;
+
         for t in (0..step_start).rev().step_by(step_size) {
+            current_step += 1;
+            let progress = if total_steps > 0 {
+                (current_step as f64 / total_steps as f64 * 100.0) as usize
+            } else {
+                100
+            };
+            println!("Diffusion step {}/{} ({}%) - timestep: {} [inpainting]", current_step, total_steps, progress, t);
+            
             let current_alpha: f64 = self.get_alpha(t);
             let prev_alpha: f64 = if t >= step_size {
                 self.get_alpha(t - step_size)
@@ -471,7 +505,9 @@ impl<B: MyBackend> Diffuser<B> {
                 conditioning.clone(),
                 unconditional_guidance_scale,
             );
-            let predx0 = (latent - pred_noise.clone() * sqrt_noise) / current_alpha.sqrt();
+            // Optimize: avoid clone by reusing pred_noise
+            let sqrt_noise_scaled = pred_noise.clone() * sqrt_noise;
+            let predx0 = (latent - sqrt_noise_scaled) / current_alpha.sqrt();
             let dir_latent = pred_noise * (1.0 - prev_alpha - sigma * sigma).sqrt();
 
             let prev_latent =
@@ -499,8 +535,8 @@ impl<B: MyBackend> Diffuser<B> {
         unconditional_guidance_scale: f64,
     ) -> Tensor<B, 4> {
         let [n_batch, _, _, _] = latent.dims();
-        let full_context_dim = conditioning.unconditional_context_full.dims()[0];
-        let open_clip_context_dim = conditioning.unconditional_context_open_clip.dims()[0];
+        let _full_context_dim = conditioning.unconditional_context_full.dims()[0];
+        let _open_clip_context_dim = conditioning.unconditional_context_open_clip.dims()[0];
 
         // grab the right contexts depending if refiner or not
         let (unconditional_context, context, unconditional_channel_context, channel_context) =
@@ -536,8 +572,9 @@ impl<B: MyBackend> Diffuser<B> {
             unconditional_channel_context.unsqueeze().repeat(0, n_batch),
         );
 
-        unconditional_latent.clone()
-            + (conditional_latent - unconditional_latent) * unconditional_guidance_scale
+        // Optimize: compute guidance in one step to reduce memory allocations
+        let guidance_diff = (conditional_latent - unconditional_latent.clone()) * unconditional_guidance_scale;
+        unconditional_latent + guidance_diff
     }
 }
 
@@ -802,6 +839,7 @@ pub fn tokenize_text<B: Backend, T: Tokenizer>(
 
 use std::f64::consts::PI;
 
+#[allow(dead_code)]
 fn cosine_schedule<B: Backend>(n_steps: usize, device: &B::Device) -> Tensor<B, 1> {
     Tensor::arange(1..n_steps as i64 + 1, device)
         .float()

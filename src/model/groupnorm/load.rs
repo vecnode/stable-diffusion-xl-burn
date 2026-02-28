@@ -4,9 +4,7 @@ use crate::model::load::*;
 use std::error::Error;
 
 use burn::{
-    config::Config,
-    module::{Module, Param},
-    nn,
+    module::Param,
     tensor::{backend::Backend, Tensor},
 };
 

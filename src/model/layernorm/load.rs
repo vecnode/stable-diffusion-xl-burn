@@ -4,10 +4,8 @@ use crate::model::load::*;
 use std::error::Error;
 
 use burn::{
-    config::Config,
-    module::{Module, Param},
-    nn,
-    tensor::{backend::Backend, Tensor},
+    module::Param,
+    tensor::backend::Backend,
 };
 
 pub fn load_layer_norm<B: Backend>(
