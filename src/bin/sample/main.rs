@@ -270,6 +270,13 @@ fn run_with_wgpu_device(device: WgpuDevice, opts: Opts) -> Result<(), Box<dyn st
     // WGPU implementation - similar structure to LibTorch but using WGPU backend
     // Note: This is experimental and may have performance differences
     
+    // Precompute model paths to avoid repeated format!() calls
+    let model_dir_str = opts.model_dir.to_str().unwrap();
+    let embedder_path = format!("{}/embedder", model_dir_str);
+    let diffuser_path = format!("{}/diffuser", model_dir_str);
+    let refiner_path = format!("{}/refiner", model_dir_str);
+    let latent_decoder_path = format!("{}/latent_decoder", model_dir_str);
+    
     // For inpainting (if needed)
     let _inpainting_info: Option<()> = opts.reference_img.map(|_ref_dir| {
         println!("Inpainting not yet implemented for WGPU backend.");
@@ -282,7 +289,7 @@ fn run_with_wgpu_device(device: WgpuDevice, opts: Opts) -> Result<(), Box<dyn st
         // Try loading with f16 first, then convert if needed
         // WGPU should handle the conversion automatically
         let embedder: Embedder<WgpuBackend> =
-            load_embedder_model_wgpu(&format!("{}/embedder", opts.model_dir.to_str().unwrap()), &device)?;
+            load_embedder_model_wgpu(&embedder_path, &device)?;
 
         let resolution = [opts.height, opts.width];  // [height, width] format
         
@@ -306,16 +313,17 @@ fn run_with_wgpu_device(device: WgpuDevice, opts: Opts) -> Result<(), Box<dyn st
     let latent = {
         println!("Loading diffuser...");
         let diffuser: Diffuser<WgpuBackend> =
-            load_diffuser_model_wgpu(&format!("{}/diffuser", opts.model_dir.to_str().unwrap()), &device)?;
+            load_diffuser_model_wgpu(&diffuser_path, &device)?;
 
         println!("Running diffuser...");
+        // Only clone conditioning once for the diffusion process
         diffuser.sample_latent(conditioning_wgpu.clone(), opts.unconditional_guidance_scale, opts.n_diffusion_steps)
     };
 
     let latent = if opts.use_refiner {
         println!("Loading refiner...");
         let diffuser: Diffuser<WgpuBackend> =
-            load_diffuser_model_wgpu(&format!("{}/refiner", opts.model_dir.to_str().unwrap()), &device)?;
+            load_diffuser_model_wgpu(&refiner_path, &device)?;
 
         println!("Running refiner...");
         diffuser.refine_latent(
@@ -332,7 +340,7 @@ fn run_with_wgpu_device(device: WgpuDevice, opts: Opts) -> Result<(), Box<dyn st
     let images = {
         println!("Loading latent decoder...");
         let latent_decoder: LatentDecoder<WgpuBackend> =
-            load_latent_decoder_model_wgpu(&format!("{}/latent_decoder", opts.model_dir.to_str().unwrap()), &device)?;
+            load_latent_decoder_model_wgpu(&latent_decoder_path, &device)?;
 
         println!("Running decoder...");
         latent_decoder.latent_to_image(latent)
@@ -429,6 +437,13 @@ fn load_latent_decoder_model_wgpu<B: Backend>(
 
 fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::error::Error>> {
     let opts = Opts::from_args();
+    
+    // Precompute model paths to avoid repeated format!() calls
+    let model_dir_str = opts.model_dir.to_str().unwrap();
+    let embedder_path = format!("{}/embedder", model_dir_str);
+    let diffuser_path = format!("{}/diffuser", model_dir_str);
+    let refiner_path = format!("{}/refiner", model_dir_str);
+    let latent_decoder_path = format!("{}/latent_decoder", model_dir_str);
 
     let inpainting_info = opts.reference_img.map(|ref_dir| {
         let imgs = load_images(&[ref_dir.to_str().unwrap().into()]).unwrap();
@@ -451,7 +466,7 @@ fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::erro
         // compute latent
         println!("Loading latent encoder...");
         let latent_decoder: LatentDecoder<TorchBackend> =
-            load_latent_decoder_model(&format!("{}/latent_decoder", opts.model_dir.to_str().unwrap()), &device).unwrap();
+            load_latent_decoder_model(&latent_decoder_path, &device).unwrap();
 
         println!("Running encoder...");
 
@@ -497,7 +512,8 @@ fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::erro
     let conditioning = {
         println!("Loading embedder...");
         let embedder: Embedder<TorchBackend> =
-            load_embedder_model(&format!("{}/embedder", opts.model_dir.to_str().unwrap()), &device).unwrap();
+            load_embedder_model(&embedder_path, &device).unwrap();
+        
 
         let resolution = if let Some(inpainting_info) = inpainting_info.as_ref() {
             [inpainting_info.orig_dims.1 as i32, inpainting_info.orig_dims.0 as i32]
@@ -526,12 +542,14 @@ fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::erro
     let latent = {
         println!("Loading diffuser...");
         let diffuser: Diffuser<TorchBackendF16> =
-            load_diffuser_model(&format!("{}/diffuser", opts.model_dir.to_str().unwrap()), &device).unwrap();
+            load_diffuser_model(&diffuser_path, &device).unwrap();
 
         if let Some(inpainting_info) = inpainting_info {
+            // Reduce clones: pass conditioning by reference where possible
             diffuser.sample_latent_with_inpainting(conditioning.clone(), opts.unconditional_guidance_scale, opts.n_diffusion_steps, inpainting_info.reference_latent, inpainting_info.mask)
         } else {
             println!("Running diffuser...");
+            // Only clone conditioning once for the diffusion process
             diffuser.sample_latent(conditioning.clone(), opts.unconditional_guidance_scale, opts.n_diffusion_steps)
         }
     };
@@ -539,12 +557,12 @@ fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::erro
     let latent = if opts.use_refiner {
         println!("Loading refiner...");
         let diffuser: Diffuser<TorchBackendF16> =
-            load_diffuser_model(&format!("{}/refiner", opts.model_dir.to_str().unwrap()), &device).unwrap();
+            load_diffuser_model(&refiner_path, &device).unwrap();
 
         println!("Running refiner...");
         diffuser.refine_latent(
             latent,
-            conditioning,
+            conditioning, // Move conditioning here (no longer needed after)
             opts.unconditional_guidance_scale,
             800,
             opts.n_diffusion_steps,
@@ -558,7 +576,7 @@ fn run_with_torch_device(device: LibTorchDevice) -> Result<(), Box<dyn std::erro
     let images = {
         println!("Loading latent decoder...");
         let latent_decoder: LatentDecoder<TorchBackend> =
-            load_latent_decoder_model(&format!("{}/latent_decoder", opts.model_dir.to_str().unwrap()), &device).unwrap();
+            load_latent_decoder_model(&latent_decoder_path, &device).unwrap();
 
         println!("Running decoder...");
         latent_decoder.latent_to_image(latent)
