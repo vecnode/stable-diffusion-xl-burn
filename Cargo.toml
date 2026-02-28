@@ -2,6 +2,7 @@
 name = "stablediffusion"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -9,6 +10,12 @@ edition = "2021"
 burn = "0.13.0"
 burn-autodiff = "0.13.0"
 # Use LibTorch with CUDA for best NVIDIA GPU performance
+# NOTE: To enable CUDA support, set TORCH_CUDA_VERSION environment variable before building:
+#   export TORCH_CUDA_VERSION=cu118  # for CUDA 11.8
+#   export TORCH_CUDA_VERSION=cu121  # for CUDA 12.1
+#   export TORCH_CUDA_VERSION=cu124  # for CUDA 12.4
+# Then: cargo clean && cargo build --release
+# Without this, LibTorch will be built without CUDA support (CPU only)
 burn-tch = "0.13.0"
 tch = "0.15.0"
 # WGPU as fallback if LibTorch CUDA detection fails

@@ -86,6 +86,10 @@ impl<E: TchElement> Backend for burn_tch::LibTorch<E> {
     }
 }
 
+// WGPU backend uses the generic Burn attention implementation (defined in trait default)
+use burn_wgpu::Wgpu;
+impl Backend for Wgpu {}
+
 //impl<B: Backend> Backend for burn_autodiff::ADBackendDecorator<B> {}
 
 use std::f32::NEG_INFINITY;
